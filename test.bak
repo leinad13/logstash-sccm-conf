@@ -1,0 +1,51 @@
+# Take Input from M:\elk\test\sccm\App*.log
+# Start at beginning of file
+input {
+	beats {
+		port => 5044
+	}
+}
+filter {
+	if [type] == "sccmlog" {
+		mutate {
+			# Strip whitespace and newlines etc... from beginning and end of line
+			strip => "message"
+		}
+		grok {
+			# Match 1 - ActionType -
+			match => { "message" => '^\A<!\[LOG\[   ActionType - %{WORD:action_type} will use Content Id: %{NOTSPACE:content_id} \+ Content Version: %{INT:content_version} for AppDT %{QUOTEDSTRING:deployment_type_name} \[%{EMAILLOCALPART:deployment_type_id}], Revision - %{INT:app_revision}]LOG]!><time="%{TIME:time}(\+|\-)([0-9])?([0-9])?([0-9])?" date="%{DATE:date}" component="%{WORD:component}" context="" type="%{INT:type}" thread="%{INT:thread}" file="%{HOSTNAME:filename}:%{INT:fileline}">$'}
+			
+			# Match 2 - Discovered application
+			match => {"message" => '^\A<!\[LOG\[\+\+\+ %{CISCO_REASON:action_type}\[AppDT Id: %{USERNAME:scope_id}/%{USERNAME:deployment_type_id}, Revision: %{INT:app_revision}]]LOG]!><time="%{TIME:time}(\+|\-)([0-9])?([0-9])?([0-9])?" date="%{DATE:date}" component="%{WORD:component}" context="" type="%{INT:type}" thread="%{INT:thread}" file="%{HOSTNAME:filename}:%{INT:fileline}">$'}
+			
+			# Match 3 - General SCCM Single Line Log Entry
+			# Confirmed working for all lines in following logs :
+			#   AppDiscovery.log
+			#   AppIntentEval.log   
+			# Partially working for the following logs :
+			#	CAS.log (Some multiline entries)
+			#   ContentTransferManager.log (Some multiline entries)
+			#   DataTransferService.log (Some multiline entries)
+			# Not working at all for the following :
+			#   AppEnforce.log (All Multiline Entries)
+			match => { "message" => '^\A<!\[LOG\[%{DATA:logtext}\]LOG]!\><time="%{TIME:time}(\+|\-)([0-9])?([0-9])?([0-9])?" date="%{DATE:date}" component="%{WORD:component}" context="" type="%{INT:type}" thread="%{INT:thread}" file="%{HOSTNAME:filename}:%{INT:fileline}">$' }
+			add_field => [ "received_at", "%{@timestamp}" ]
+			add_field => [ "received_from", "%{host}" ]
+			add_field => [ "logtime", "%{date} %{time}"]
+		}
+		date {
+			match => ["logtime", "MM-dd-YYYY HH:mm:ss.SSS"]
+		}
+	}
+}
+output {
+  elasticsearch {
+    hosts => ["localhost:9200"]
+    user => "elastic"
+    password => "L!ghtn1ng"
+    sniffing => true
+    manage_template => false
+    index => "%{[@metadata][beat]}-%{+YYYY.MM.dd}"
+    document_type => "%{[@metadata][type]}"
+  }
+}
